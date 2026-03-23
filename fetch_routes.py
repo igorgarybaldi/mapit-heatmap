@@ -2,56 +2,65 @@
 """
 fetch_routes.py — Automated Mapit routes fetcher
 =================================================
-Fetches new routes directly from the Mapit API and regenerates routes.js.
+Fetches new routes from the Mapit API using AWS Cognito auth.
 Pure Python stdlib — no pip required.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FIRST-TIME SETUP (one-time, ~2 minutes)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. Open Chrome, go to app.mapit.me (logged in as Igor)
-2. Open DevTools → Network tab (F12 → Network)
-3. Click any button in the app to trigger a network request
-4. Right-click any request to mapit.me → "Copy" → "Copy as cURL"
-5. Run: python3 fetch_routes.py --setup
-   Then paste the cURL command and press Ctrl+D
+1. Open Chrome, go to app.mapit.me (logged in)
+2. Open DevTools (F12) → Console tab
+3. Paste this and press Enter:
+     copy(localStorage.getItem(Object.keys(localStorage).find(k=>k.includes('refreshToken'))))
+4. Run: python3 fetch_routes.py --setup
+5. Paste the refresh token and press Enter
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WEEKLY USAGE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     python3 fetch_routes.py
 
-Schedule weekly via cron (runs every Monday at 11:00):
-    crontab -e
-    Add: 0 11 * * 1 cd /Users/garybaldi2/Library/CloudStorage/Dropbox/Own/Claude/Cowork/Mapit && python3 fetch_routes.py >> fetch.log 2>&1
+Runs automatically every Monday via GitHub Actions.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-COOKIE EXPIRY
+TOKEN EXPIRY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Cookies typically last 30–90 days. If you see "Auth failed", re-run --setup.
+Refresh tokens last ~30 days. If you see "Auth failed", re-run --setup.
 """
 
 import json
-import re
+import hmac
+import hashlib
 import sys
-import shlex
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-ROUTES_DIR   = Path(__file__).parent / 'routes'
-COOKIES_FILE = Path(__file__).parent / 'mapit_cookies.json'
-STATUS_FILE  = Path(__file__).parent / 'routes' / 'status.js'
-VEHICLE_ID   = 'v-2c26shA02qUJ8zFyq5dK9Rrw3TJ'
-API_URL      = f'https://geo.prod.mapit.me/v1/routes?vehicleId={VEHICLE_ID}'
+ROUTES_DIR    = Path(__file__).parent / 'routes'
+AUTH_FILE     = Path(__file__).parent / 'mapit_cookies.json'
+STATUS_FILE   = Path(__file__).parent / 'routes' / 'status.js'
+VEHICLE_ID    = 'v-2c26shA02qUJ8zFyq5dK9Rrw3TJ'
+API_URL       = f'https://geo.prod.mapit.me/v1/routes?vehicleId={VEHICLE_ID}'
+
+# AWS Cognito config (from Mapit app)
+COGNITO_REGION    = 'eu-west-1'
+COGNITO_CLIENT_ID = '7fo1dt507lf6riggmprmql2mpb'
+COGNITO_USER_POOL = f'cognito-idp.{COGNITO_REGION}.amazonaws.com/eu-west-1_nHd6Er8N6'
+COGNITO_IDP_URL   = f'https://cognito-idp.{COGNITO_REGION}.amazonaws.com/'
+COGNITO_ID_URL    = f'https://cognito-identity.{COGNITO_REGION}.amazonaws.com/'
+
+# Identity pool ID — discovered from Mapit app JS bundle
+IDENTITY_POOL_ID  = 'eu-west-1:a25d1457-542f-43d3-8b47-c3c60ed3675d'
 
 
 def write_status(error=None, new_routes=0, total_routes=0):
     """Write routes/status.js so the HTML can show auth errors on load."""
     payload = {
-        'error':       error,        # None | 'auth_expired' | 'network'
+        'error':       error,
         'newRoutes':   new_routes,
         'totalRoutes': total_routes,
         'updatedAt':   datetime.now().isoformat(timespec='seconds'),
@@ -60,92 +69,226 @@ def write_status(error=None, new_routes=0, total_routes=0):
     with open(STATUS_FILE, 'w') as f:
         f.write(content)
 
-# ── Cookie setup ──────────────────────────────────────────────────────────────
 
-def setup_from_curl():
-    """Parse a cURL command (from DevTools 'Copy as cURL') and save cookies + headers."""
-    print("Paste the cURL command (from DevTools → Network → Copy as cURL).")
-    print("Press Enter then Ctrl+D when done:\n")
-    curl_cmd = sys.stdin.read().strip()
+# ── AWS Signature V4 ─────────────────────────────────────────────────────────
 
-    # Extract cookie header from curl -H 'cookie: ...' or --cookie '...'
-    cookies_str = None
-    headers = {}
+def _sign(key, msg):
+    return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
 
-    # Parse all -H / --header flags
-    # shlex handles multi-line and quoted strings
-    try:
-        tokens = shlex.split(curl_cmd.replace('\\\n', ' '))
-    except ValueError:
-        # fallback: basic regex
-        tokens = curl_cmd.split()
 
-    i = 0
-    while i < len(tokens):
-        tok = tokens[i]
-        if tok in ('-H', '--header') and i + 1 < len(tokens):
-            header = tokens[i + 1]
-            if ':' in header:
-                name, _, value = header.partition(':')
-                name = name.strip().lower()
-                value = value.strip()
-                if name == 'cookie':
-                    cookies_str = value
-                elif name not in ('host',):  # keep useful headers
-                    headers[name.title()] = value
-            i += 2
-        else:
-            i += 1
+def aws_sigv4_headers(method, url, access_key, secret_key, session_token, region, service):
+    """Generate AWS Signature V4 auth headers for a request."""
+    parsed = urlparse(url)
+    host = parsed.hostname
+    path = parsed.path or '/'
+    query = parsed.query
 
-    if not cookies_str:
-        print("ERROR: No 'cookie' header found in the cURL command.")
-        print("Make sure you used 'Copy as cURL' (not 'Copy as fetch') and the request had cookies.")
-        sys.exit(1)
+    now = datetime.now(timezone.utc)
+    amz_date = now.strftime('%Y%m%dT%H%M%SZ')
+    date_stamp = now.strftime('%Y%m%d')
 
-    # Parse cookie string into dict
-    cookies = {}
-    for part in cookies_str.split(';'):
-        part = part.strip()
-        if '=' in part:
-            k, _, v = part.partition('=')
-            cookies[k.strip()] = v.strip()
-
-    saved = {
-        'cookies': cookies,
-        'headers': {k: v for k, v in headers.items()
-                    if k.lower() in ('authorization', 'x-api-key', 'user-agent')},
-        'saved_at': datetime.now().isoformat()
+    # Headers to sign (must be sorted)
+    headers_to_sign = {
+        'accept': 'application/json',
+        'host': host,
+        'x-amz-date': amz_date,
     }
 
-    with open(COOKIES_FILE, 'w') as f:
+    signed_headers_str = ';'.join(sorted(headers_to_sign.keys()))
+    canonical_headers = ''.join(f'{k}:{v}\n' for k, v in sorted(headers_to_sign.items()))
+    payload_hash = hashlib.sha256(b'').hexdigest()
+
+    canonical_request = (
+        f'{method}\n{path}\n{query}\n{canonical_headers}\n'
+        f'{signed_headers_str}\n{payload_hash}'
+    )
+
+    credential_scope = f'{date_stamp}/{region}/{service}/aws4_request'
+    string_to_sign = (
+        f'AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n'
+        f'{hashlib.sha256(canonical_request.encode()).hexdigest()}'
+    )
+
+    k_date    = _sign(f'AWS4{secret_key}'.encode('utf-8'), date_stamp)
+    k_region  = _sign(k_date, region)
+    k_service = _sign(k_region, service)
+    k_signing = _sign(k_service, 'aws4_request')
+    signature = hmac.new(k_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
+
+    return {
+        'Authorization': (
+            f'AWS4-HMAC-SHA256 Credential={access_key}/{credential_scope}, '
+            f'SignedHeaders={signed_headers_str}, Signature={signature}'
+        ),
+        'X-Amz-Date': amz_date,
+        'X-Amz-Security-Token': session_token,
+    }
+
+
+# ── Cognito auth flow ────────────────────────────────────────────────────────
+
+def _cognito_call(url, target, payload):
+    """Make a Cognito API call."""
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        'Content-Type': 'application/x-amz-json-1.1',
+        'X-Amz-Target': target,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode(errors='replace')[:500]
+        raise RuntimeError(f"Cognito {target} failed (HTTP {e.code}): {error_body}")
+
+
+def refresh_cognito_tokens(refresh_token):
+    """Use refresh token to get fresh id_token + access_token."""
+    result = _cognito_call(
+        COGNITO_IDP_URL,
+        'AWSCognitoIdentityProviderService.InitiateAuth',
+        {
+            'AuthFlow': 'REFRESH_TOKEN_AUTH',
+            'ClientId': COGNITO_CLIENT_ID,
+            'AuthParameters': {'REFRESH_TOKEN': refresh_token},
+        }
+    )
+    auth = result['AuthenticationResult']
+    return auth['IdToken'], auth.get('AccessToken', '')
+
+
+def get_aws_credentials(id_token, identity_pool_id):
+    """Exchange Cognito id_token for temporary AWS credentials."""
+    # Step 1: Get identity ID
+    id_result = _cognito_call(
+        COGNITO_ID_URL,
+        'AWSCognitoIdentityService.GetId',
+        {
+            'IdentityPoolId': identity_pool_id,
+            'Logins': {COGNITO_USER_POOL: id_token},
+        }
+    )
+    identity_id = id_result['IdentityId']
+
+    # Step 2: Get credentials
+    creds_result = _cognito_call(
+        COGNITO_ID_URL,
+        'AWSCognitoIdentityService.GetCredentialsForIdentity',
+        {
+            'IdentityId': identity_id,
+            'Logins': {COGNITO_USER_POOL: id_token},
+        }
+    )
+    creds = creds_result['Credentials']
+    return creds['AccessKeyId'], creds['SecretKey'], creds['SessionToken']
+
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+
+def setup():
+    """Interactive setup: save refresh token and discover identity pool."""
+    print("━━━ Mapit Auth Setup ━━━\n")
+
+    # Get refresh token
+    print("1. Open Chrome → app.mapit.me (logged in)")
+    print("2. DevTools (F12) → Console tab")
+    print("3. Paste this command and press Enter:\n")
+    print("   copy(localStorage.getItem(Object.keys(localStorage).find(k=>k.includes('refreshToken'))))\n")
+    print("4. Now paste the refresh token here (it's in your clipboard):")
+    refresh_token = input("   > ").strip()
+
+    if not refresh_token or len(refresh_token) < 100:
+        print("ERROR: That doesn't look like a valid refresh token.")
+        sys.exit(1)
+
+    # Get identity pool ID
+    print("\n5. Now paste this in the Console:\n")
+    print("   copy(Object.keys(localStorage).find(k=>k.startsWith('aws.cognito.identity-id')).split('.').pop())\n")
+    print("6. Paste the identity pool ID here:")
+    identity_pool_id = input("   > ").strip()
+
+    if not identity_pool_id or ':' not in identity_pool_id:
+        print("ERROR: That doesn't look like a valid identity pool ID (expected format: eu-west-1:uuid).")
+        sys.exit(1)
+
+    # Verify the tokens work
+    print("\n  Verifying tokens...", end=' ', flush=True)
+    try:
+        id_token, _ = refresh_cognito_tokens(refresh_token)
+        print("✓ Token refresh OK")
+        print("  Getting AWS credentials...", end=' ', flush=True)
+        ak, sk, st = get_aws_credentials(id_token, identity_pool_id)
+        print("✓ AWS credentials OK")
+    except Exception as e:
+        print(f"\n  ERROR: Verification failed: {e}")
+        sys.exit(1)
+
+    # Save
+    saved = {
+        'refresh_token':   refresh_token,
+        'identity_pool_id': identity_pool_id,
+        'saved_at':         datetime.now().isoformat(),
+    }
+    with open(AUTH_FILE, 'w') as f:
         json.dump(saved, f, indent=2)
 
-    print(f"\n✓ Saved {len(cookies)} cookies to {COOKIES_FILE.name}")
-    print("  Cookie names:", ', '.join(cookies.keys()))
-    print("\nSetup complete. Run 'python3 fetch_routes.py' to fetch routes.")
+    print(f"\n✓ Auth saved to {AUTH_FILE.name}")
+    print("  Run 'python3 fetch_routes.py' to fetch routes.")
 
 
 def load_auth():
-    if not COOKIES_FILE.exists():
+    """Load saved refresh token and identity pool ID."""
+    if not AUTH_FILE.exists():
         print("ERROR: mapit_cookies.json not found.")
         print("First-time setup: python3 fetch_routes.py --setup")
         sys.exit(1)
-    with open(COOKIES_FILE) as f:
+    with open(AUTH_FILE) as f:
         data = json.load(f)
-    return data.get('cookies', {}), data.get('headers', {})
+
+    refresh_token = data.get('refresh_token')
+    identity_pool_id = data.get('identity_pool_id')
+
+    if not refresh_token:
+        print("ERROR: No refresh_token in auth file. Re-run: python3 fetch_routes.py --setup")
+        sys.exit(1)
+    if not identity_pool_id:
+        print("ERROR: No identity_pool_id in auth file. Re-run: python3 fetch_routes.py --setup")
+        sys.exit(1)
+
+    return refresh_token, identity_pool_id
+
 
 # ── API fetch ─────────────────────────────────────────────────────────────────
 
-def fetch_routes_from_api(cookies, extra_headers):
-    cookie_str = '; '.join(f'{k}={v}' for k, v in cookies.items())
+def fetch_routes_from_api(refresh_token, identity_pool_id):
+    """Authenticate via Cognito and fetch routes from Mapit API."""
+    # Step 1: Refresh tokens
+    try:
+        id_token, _ = refresh_cognito_tokens(refresh_token)
+    except RuntimeError as e:
+        if 'NotAuthorizedException' in str(e):
+            write_status(error='auth_expired')
+            print(f"ERROR: Refresh token expired. Re-run: python3 fetch_routes.py --setup")
+            sys.exit(1)
+        raise
+
+    # Step 2: Get AWS credentials
+    access_key, secret_key, session_token = get_aws_credentials(id_token, identity_pool_id)
+
+    # Step 3: Sign the request
+    sig_headers = aws_sigv4_headers(
+        'GET', API_URL, access_key, secret_key, session_token,
+        COGNITO_REGION, 'execute-api'
+    )
 
     req = urllib.request.Request(API_URL, headers={
-        'Cookie':     cookie_str,
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'Accept':     'application/json, text/plain, */*',
-        'Referer':    'https://app.mapit.me/',
-        'Origin':     'https://app.mapit.me',
-        **extra_headers,
+        'Accept':      'application/json',
+        'Origin':      'https://app.mapit.me',
+        'Referer':     'https://app.mapit.me/',
+        'User-Agent':  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                       'AppleWebKit/537.36 Chrome/123.0.0.0 Safari/537.36',
+        'X-Id-Token':  id_token,
+        **sig_headers,
     })
 
     try:
@@ -154,7 +297,7 @@ def fetch_routes_from_api(cookies, extra_headers):
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             write_status(error='auth_expired')
-            print(f"ERROR: Auth failed (HTTP {e.code}). Cookies may have expired.")
+            print(f"ERROR: Auth failed (HTTP {e.code}). Token may have expired.")
             print("Re-run setup: python3 fetch_routes.py --setup")
             sys.exit(1)
         write_status(error='network')
@@ -164,10 +307,10 @@ def fetch_routes_from_api(cookies, extra_headers):
     except urllib.error.URLError as e:
         write_status(error='network')
         print(f"ERROR: Network error: {e.reason}")
-        print("Check your internet connection.")
         sys.exit(1)
 
-# ── Route processing (shared logic with update_routes.py) ─────────────────────
+
+# ── Route processing ─────────────────────────────────────────────────────────
 
 def process_new_routes(routes_raw):
     existing_ids = {f.stem.split('_', 1)[1] for f in ROUTES_DIR.glob('*.json')}
@@ -193,7 +336,7 @@ def process_new_routes(routes_raw):
         route_obj = {
             'id':        r['id'],
             'date':      date_str,
-            'dayOfWeek': started.isoweekday() - 1,  # 0=Mon, 6=Sun
+            'dayOfWeek': started.isoweekday() - 1,
             'distance':  round(r.get('distance', 0) / 1000, 3),
             'duration':  round((ended - started).seconds / 60, 1),
             'maxSpeed':  r.get('maxSpeed', None),
@@ -231,20 +374,21 @@ def regenerate_routes_js():
 
     return len(all_routes), min_date, max_date
 
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
     ROUTES_DIR.mkdir(exist_ok=True)
 
     if '--setup' in sys.argv:
-        setup_from_curl()
+        setup()
         sys.exit(0)
 
     ts = datetime.now().strftime('%Y-%m-%d %H:%M')
     print(f"[{ts}] Fetching routes from Mapit API...")
 
-    cookies, extra_headers = load_auth()
-    routes_raw = fetch_routes_from_api(cookies, extra_headers)
+    refresh_token, identity_pool_id = load_auth()
+    routes_raw = fetch_routes_from_api(refresh_token, identity_pool_id)
     new_routes = process_new_routes(routes_raw)
 
     total = len(routes_raw)
