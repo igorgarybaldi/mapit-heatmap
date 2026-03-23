@@ -1,0 +1,8 @@
+mapit_cookies.json
+__pycache__/
+.claude/
+journey_heatmap_march2026.html
+journey_heatmap_full_history.html
+*.har
+fetch.log
+.DS_Store

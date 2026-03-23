@@ -1,0 +1,39 @@
+name: Fetch Mapit Routes
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'   # Every Monday 09:00 UTC = 11:00 Barcelona (CET/CEST)
+  workflow_dispatch:        # Manual trigger from GitHub UI
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Write cookies from secret
+        run: echo '${{ secrets.MAPIT_COOKIES }}' > mapit_cookies.json
+
+      - name: Fetch new routes
+        run: python3 fetch_routes.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add routes/
+          if git diff --cached --quiet; then
+            echo "No new routes"
+          else
+            git commit -m "Update routes $(date +%Y-%m-%d)"
+            git push
+          fi
+
+      - name: Clean up cookies
+        if: always()
+        run: rm -f mapit_cookies.json
