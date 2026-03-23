@@ -16,12 +16,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Write cookies from secret
-        env:
-          MAPIT_COOKIES: ${{ secrets.MAPIT_COOKIES }}
-        run: printenv MAPIT_COOKIES > mapit_cookies.json
-
       - name: Fetch new routes
+        env:
+          MAPIT_REFRESH_TOKEN: ${{ secrets.MAPIT_REFRESH_TOKEN }}
         run: python3 fetch_routes.py
 
       - name: Commit and push if changed
@@ -35,7 +32,3 @@ jobs:
             git commit -m "Update routes $(date +%Y-%m-%d)"
             git push
           fi
-
-      - name: Clean up cookies
-        if: always()
-        run: rm -f mapit_cookies.json

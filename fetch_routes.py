@@ -237,7 +237,17 @@ def setup():
 
 
 def load_auth():
-    """Load saved refresh token and identity pool ID."""
+    """Load refresh token and identity pool ID from env vars or file."""
+    import os
+
+    # Prefer environment variables (used by GitHub Actions)
+    refresh_token = os.environ.get('MAPIT_REFRESH_TOKEN')
+    identity_pool_id = os.environ.get('MAPIT_IDENTITY_POOL_ID', IDENTITY_POOL_ID)
+
+    if refresh_token:
+        return refresh_token, identity_pool_id
+
+    # Fall back to JSON file (local usage)
     if not AUTH_FILE.exists():
         print("ERROR: mapit_cookies.json not found.")
         print("First-time setup: python3 fetch_routes.py --setup")
@@ -246,7 +256,7 @@ def load_auth():
         data = json.load(f)
 
     refresh_token = data.get('refresh_token')
-    identity_pool_id = data.get('identity_pool_id')
+    identity_pool_id = data.get('identity_pool_id', IDENTITY_POOL_ID)
 
     if not refresh_token:
         print("ERROR: No refresh_token in auth file. Re-run: python3 fetch_routes.py --setup")
