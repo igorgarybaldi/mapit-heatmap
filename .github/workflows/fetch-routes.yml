@@ -5,6 +5,9 @@ on:
     - cron: '0 9 * * 1'   # Every Monday 09:00 UTC = 11:00 Barcelona (CET/CEST)
   workflow_dispatch:        # Manual trigger from GitHub UI
 
+permissions:
+  contents: write
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
