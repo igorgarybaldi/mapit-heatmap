@@ -17,7 +17,9 @@ jobs:
           python-version: '3.12'
 
       - name: Write cookies from secret
-        run: echo '${{ secrets.MAPIT_COOKIES }}' > mapit_cookies.json
+        env:
+          MAPIT_COOKIES: ${{ secrets.MAPIT_COOKIES }}
+        run: printenv MAPIT_COOKIES > mapit_cookies.json
 
       - name: Fetch new routes
         run: python3 fetch_routes.py
