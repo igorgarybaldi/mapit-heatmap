@@ -494,7 +494,7 @@
 <!-- NEW ROUTES TOAST -->
 <div id="new-routes-toast" class="hidden">
   <div class="toast-text" id="toast-text"></div>
-  <button class="toast-close" onclick="document.getElementById('new-routes-toast').classList.add('hidden')" title="Dismiss"></button>
+  <button class="toast-close" onclick="dismissNewRoutesToast()" title="Dismiss"></button>
 </div>
 
 <!-- MAP -->
@@ -715,17 +715,34 @@ function copySetupCmd() {
 }
 
 // ═══════════════════════════════════════════════
-// NEW ROUTES TOAST
+// NEW ROUTES TOAST (localStorage-based)
 // ═══════════════════════════════════════════════
 (function() {
-  const s = window.MAPIT_STATUS;
-  if (!s || !s.newRoutes || s.newRoutes < 1) return;
-  const n    = s.newRoutes;
+  const total = (window.ROUTES_DATA || []).length;
+  if (!total) return;
+  const KEY = 'mapit_last_seen_count';
+  const lastSeen = parseInt(localStorage.getItem(KEY), 10);
+  if (isNaN(lastSeen)) {
+    // First visit ever — save silently, no toast
+    localStorage.setItem(KEY, total);
+    return;
+  }
+  const newCount = total - lastSeen;
+  if (newCount < 1) {
+    // Update in case routes were removed/reprocessed
+    localStorage.setItem(KEY, total);
+    return;
+  }
   const toast = document.getElementById('new-routes-toast');
   const text  = document.getElementById('toast-text');
-  text.innerHTML = `<strong>${n} new route${n > 1 ? 's' : ''}</strong> added this week.`;
+  text.innerHTML = `<strong>${newCount} new route${newCount > 1 ? 's' : ''}</strong> since your last visit.`;
   toast.classList.remove('hidden');
 })();
+
+function dismissNewRoutesToast() {
+  document.getElementById('new-routes-toast').classList.add('hidden');
+  localStorage.setItem('mapit_last_seen_count', (window.ROUTES_DATA || []).length);
+}
 
 // ═══════════════════════════════════════════════
 // DATA & STATE
