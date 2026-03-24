@@ -2,7 +2,7 @@ name: Fetch Mapit Routes
 
 on:
   schedule:
-    - cron: '0 9 * * 1'   # Every Monday 09:00 UTC = 11:00 Barcelona (CET/CEST)
+    - cron: '0 9 * * *'   # Every day 09:00 UTC = 11:00 Barcelona (CET/CEST)
   workflow_dispatch:        # Manual trigger from GitHub UI
 
 permissions:
