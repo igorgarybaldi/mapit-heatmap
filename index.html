@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Journey Heatmap — Honda PCX 125</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -45,8 +45,9 @@
       background: var(--panel-bg); backdrop-filter: blur(12px);
       border-bottom: 1px solid var(--panel-border);
       padding: 10px 16px;
+      padding-top: calc(10px + env(safe-area-inset-top, 0px));
       display: flex; align-items: center; gap: 12px;
-      min-height: 56px;
+      min-height: calc(56px + env(safe-area-inset-top, 0px));
     }
     #header-title { flex-shrink: 0; }
     #header-title h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
@@ -70,7 +71,7 @@
     .map-btn.active { background: var(--accent); color: #fff; border-color: transparent; }
 
     /* ── MAP ── */
-    #map { position: fixed; top: 56px; left: 0; right: 0; bottom: 0; z-index: 1; }
+    #map { position: fixed; top: calc(56px + env(safe-area-inset-top, 0px)); left: 0; right: 0; bottom: 0; z-index: 1; }
 
     /* ── PANELS (shared) ── */
     .panel {
@@ -325,7 +326,7 @@
     #dashboard-drawer {
       top: 0; bottom: auto;
       border-radius: 0 0 16px 16px; border-top: none;
-      padding-top: 56px; /* clear header */
+      padding-top: calc(56px + env(safe-area-inset-top, 0px)); /* clear header */
       transform: translateY(-100%);
     }
     #dashboard-drawer.open { transform: translateY(0); }
@@ -361,7 +362,7 @@
     /* ── MOBILE BOTTOM NAV ── */
     #mobile-nav {
       display: none; /* shown via media query */
-      position: fixed; bottom: 14px; left: 14px; right: 14px; z-index: 1100;
+      position: fixed; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); left: 14px; right: 14px; z-index: 1100;
       justify-content: space-between; pointer-events: none;
     }
     .mobile-nav-btn {
@@ -382,7 +383,7 @@
     /* ═══════════════════════════════════════════════ */
     @media (max-width: 768px) {
       /* Header: compact */
-      #header { padding: 8px 12px; min-height: 48px; gap: 8px; }
+      #header { padding: 8px 12px; padding-top: calc(8px + env(safe-area-inset-top, 0px)); min-height: calc(48px + env(safe-area-inset-top, 0px)); gap: 8px; }
       #header-title h1 { font-size: 15px; }
       #header-title .sub { font-size: 9px; }
 
@@ -396,7 +397,7 @@
       .map-btn { padding: 6px 10px; }
 
       /* Map: adjust for header */
-      #map { top: 48px; bottom: 0; }
+      #map { top: calc(48px + env(safe-area-inset-top, 0px)); bottom: 0; }
 
       /* Hide desktop panels */
       #filters-panel, #controls-panel {
@@ -407,6 +408,7 @@
         transform: translateY(100%);
         transition: transform 0.3s ease;
         max-height: 60vh; overflow-y: auto;
+        padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)) !important;
       }
       #filters-panel.mobile-open, #controls-panel.mobile-open {
         transform: translateY(0);
