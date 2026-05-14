@@ -1,1 +1,1 @@
-window.MAPIT_STATUS = {"error": null, "newRoutes": 10, "totalRoutes": 831, "updatedAt": "2026-05-13T11:30:44"};
+window.MAPIT_STATUS = {"error": null, "newRoutes": 3, "totalRoutes": 834, "updatedAt": "2026-05-14T11:13:44"};
