@@ -760,9 +760,14 @@ let routesVisible  = true;
 let filterDebounce = null;
 
 const LINE_COLOR = { dark: '#ff6b35', light: '#d35400' };
+// Esri gray canvas: key-free replacement for CARTO basemaps (CARTO now requires an API key)
 const TILE_LAYERS = {
-  dark:  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-  light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+  dark:  'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+  light: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}'
+};
+const TILE_OPTIONS = {
+  attribution: 'Tiles © Esri — Esri, HERE, Garmin, OpenStreetMap contributors',
+  maxNativeZoom: 16, maxZoom: 19
 };
 
 // ═══════════════════════════════════════════════
@@ -787,6 +792,7 @@ function togglePanel(id) {
   const toggle = document.getElementById(id + '-toggle');
   panel.classList.toggle('collapsed');
   toggle.textContent = panel.classList.contains('collapsed') ? '+' : '−';
+  saveSettings();
 }
 
 // ═══════════════════════════════════════════════
@@ -851,10 +857,7 @@ const avgLng = allRoutes.reduce((s,r) => s + r.coords[0][1], 0) / TOTAL;
 
 const map = L.map('map', { zoomControl: true }).setView([avgLat, avgLng], 13);
 
-let tileLayer = L.tileLayer(TILE_LAYERS.dark, {
-  attribution: '© OpenStreetMap © CARTO',
-  subdomains: 'abcd', maxZoom: 19
-}).addTo(map);
+let tileLayer = L.tileLayer(TILE_LAYERS.dark, TILE_OPTIONS).addTo(map);
 
 // ═══════════════════════════════════════════════
 // PRE-BUILD ALL POLYLINES
@@ -1011,6 +1014,7 @@ function resetFilters() {
   updateSliderFill(document.getElementById('dist-min'));
   updateSliderFill(document.getElementById('dist-max'));
   applyFilters();
+  saveSettings();
 }
 
 // ═══════════════════════════════════════════════
@@ -1070,10 +1074,7 @@ document.getElementById('sl-opacity').addEventListener('input', function() {
 function setMapType(type) {
   currentMapType = type;
   map.removeLayer(tileLayer);
-  tileLayer = L.tileLayer(TILE_LAYERS[type], {
-    attribution: '© OpenStreetMap © CARTO',
-    subdomains: 'abcd', maxZoom: 19
-  }).addTo(map);
+  tileLayer = L.tileLayer(TILE_LAYERS[type], TILE_OPTIONS).addTo(map);
 
   routeGroup.eachLayer(l => {
     if (l.options.opacity > 0) l.setStyle({ color: LINE_COLOR[type] });
@@ -1085,11 +1086,61 @@ function setMapType(type) {
 
   // Re-apply slider fills after theme switch (colours change)
   initSliderFills();
+  saveSettings();
 }
+
+// ═══════════════════════════════════════════════
+// PERSISTENT SETTINGS (localStorage)
+// ═══════════════════════════════════════════════
+const SETTINGS_KEY = 'mapit_settings';
+const SETTING_IDS = ['chk-heat', 'chk-routes', 'sl-heat-opacity', 'sl-radius', 'sl-blur',
+                     'sl-opacity', 'date-from', 'date-to', 'dist-min', 'dist-max'];
+let restoringSettings = false;
+
+function saveSettings() {
+  if (restoringSettings) return;
+  const v = {};
+  SETTING_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    v[id] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  v.days = [...document.querySelectorAll('.day-cb')].map(cb => cb.checked);
+  v.theme = currentMapType;
+  v.collapsed = ['filters-panel', 'controls-panel']
+    .filter(id => document.getElementById(id).classList.contains('collapsed'));
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(v)); } catch (e) {}
+}
+
+function restoreSettings() {
+  let v;
+  try { v = JSON.parse(localStorage.getItem(SETTINGS_KEY)); } catch (e) {}
+  if (!v) return;
+  restoringSettings = true;
+  SETTING_IDS.forEach(id => {
+    if (!(id in v)) return;
+    const el = document.getElementById(id);
+    if (el.type === 'checkbox') el.checked = !!v[id]; else el.value = v[id];
+    // fire the existing handlers so labels, layers and state all update
+    el.dispatchEvent(new Event(el.type === 'range' ? 'input' : 'change'));
+  });
+  if (Array.isArray(v.days))
+    document.querySelectorAll('.day-cb').forEach((cb, i) => { cb.checked = v.days[i] !== false; });
+  if (v.theme && v.theme !== currentMapType && TILE_LAYERS[v.theme]) setMapType(v.theme);
+  if (!isMobile() && Array.isArray(v.collapsed))
+    v.collapsed.forEach(id => {
+      if (!document.getElementById(id).classList.contains('collapsed')) togglePanel(id);
+    });
+  restoringSettings = false;
+}
+
+['input', 'change'].forEach(evt => document.addEventListener(evt, e => {
+  if (SETTING_IDS.includes(e.target.id) || e.target.classList.contains('day-cb')) saveSettings();
+}));
 
 // ═══════════════════════════════════════════════
 // INITIAL RENDER
 // ═══════════════════════════════════════════════
+restoreSettings();
 initSliderFills();
 applyFilters();
 </script>

@@ -227,12 +227,16 @@ Header stats (journeys, total km, GPS points, top speed, avg speed) **update dyn
 - `#tt-date`, `#tt-dist`, `#tt-dur`, `#tt-max`, `#tt-avg`
 
 ### Map tiles
+Esri gray canvas (key-free). CARTO basemaps were replaced in Oct 2026 because they began returning an "API KEY REQUIRED" watermark.
 ```javascript
 const TILE_LAYERS = {
-  dark:  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-  light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-};
+  dark:  '.../Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+  light: '.../Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}'
+};  // maxNativeZoom 16
 ```
+
+### Saved settings
+Sliders, layer toggles, date/distance/day filters, theme and panel collapsed state are saved in `localStorage['mapit_settings']` (per browser) and restored on load. "Reset filters" saves the cleared filters.
 
 ### Route line colours
 ```javascript
